@@ -1,0 +1,100 @@
+def lire_fichier_hex(path):
+    """Lit le fichier hex et renvoie une liste d’octets."""
+    with open(path, "r", encoding="utf-8") as f:
+        contenu = f.read().replace(" ", "").replace("\n", "").replace("\t", "")
+
+    if len(contenu) % 2 != 0:
+        raise ValueError("Nombre impair de caractères hex !")
+
+    return [int(contenu[i:i+2], 16) for i in range(0, len(contenu), 2)]
+
+
+def format_mac(addr):
+    return ":".join(f"{o:02X}" for o in addr)
+
+def format_ip(addr):
+    return ".".join(str(o) for o in addr)
+
+
+def trouver_trames_ipv4(buf):
+    """
+    Détecte les trames IPv4 via la signature 08 00 45.
+    Retourne une liste de tuples (offset, longueur).
+    """
+    trames = []
+    i = 0
+
+    while i < len(buf) - 3:
+        # Signature Ethernet + IPv4 (dest MAC + src MAC = 12 octets, EtherType = 2 octets)
+        # Donc on cherche : .. .. .. .. .. .. .. .. .. .. .. .. 08 00 45
+        if buf[i+12:i+15] == [0x08, 0x00, 0x45]:
+
+            # Début header IPv4
+            ipv4_start = i + 14
+
+            # Longueur totale champ Total Length (octets 2 et 3 du header IPv4)
+            total_length = (buf[ipv4_start + 2] << 8) + buf[ipv4_start + 3]
+
+            trame_len = 14 + total_length  # Ethernet + IPv4
+
+            trames.append((i, trame_len))
+
+            i += trame_len  # avancement propre
+        else:
+            i += 1
+
+    return trames
+
+
+def analyser_trame(buf, offset, longueur):
+    """
+    Analyse une trame IPv4 trouvée via la signature 080045.
+    """
+    info = {}
+
+    # Ethernet
+    info["mac_dest"] = buf[offset:offset+6]
+    info["mac_src"] = buf[offset+6:offset+12]
+
+    # IPv4
+    ipv4 = offset + 14
+
+    info["ip_src"] = buf[ipv4+12:ipv4+16]
+    info["ip_dst"] = buf[ipv4+16:ipv4+20]
+
+    # Protocole IP interne
+    proto = buf[ipv4 + 9]
+    table_proto = {
+        1: "ICMP",
+        6: "TCP",
+        17: "UDP"
+    }
+    info["protocole"] = table_proto.get(proto, f"Inconnu ({proto})")
+
+    info["longueur"] = longueur
+
+    return info
+
+
+def main():
+    buffer = lire_fichier_hex("dumpHex.txt")
+
+    trames = trouver_trames_ipv4(buffer)
+
+    print(f"Nombre de trames IPv4 détectées via 080045 : {len(trames)}")
+
+    for idx, (offset, longueur) in enumerate(trames, 1):
+        info = analyser_trame(buffer, offset, longueur)
+
+        print("\n--- TRAME", idx, "---")
+        print("Offset          :", offset)
+        print("Longueur        :", longueur, "octets")
+        print("MAC Destination :", format_mac(info["mac_dest"]))
+        print("MAC Source      :", format_mac(info["mac_src"]))
+        print("IP Source       :", format_ip(info["ip_src"]))
+        print("IP Destination  :", format_ip(info["ip_dst"]))
+        print("Protocole IP    :", info["protocole"])
+
+
+if __name__ == "__main__":
+    main()
